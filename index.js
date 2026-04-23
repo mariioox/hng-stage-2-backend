@@ -30,6 +30,24 @@ app.get("/api/profiles", async (req, res) => {
       order = "desc",
     } = req.query;
 
+    // 422 VALIDATION
+    const numericFields = {
+      min_age,
+      max_age,
+      min_gender_probability,
+      min_country_probability,
+      page,
+      limit,
+    };
+    for (const [key, value] of Object.entries(numericFields)) {
+      if (value && isNaN(Number(value))) {
+        return res.status(422).json({
+          status: "error",
+          message: `Invalid parameter type for ${key}`,
+        });
+      }
+    }
+
     const p = Math.max(1, parseInt(page));
     const l = Math.min(50, Math.max(1, parseInt(limit)));
     const from = (p - 1) * l;
@@ -37,15 +55,11 @@ app.get("/api/profiles", async (req, res) => {
 
     let query = supabase.from("profiles").select("*", { count: "exact" });
 
-    // Filter Logic - Using lowercase to ensure matches
     if (gender) query = query.eq("gender", gender.toLowerCase());
     if (age_group) query = query.eq("age_group", age_group.toLowerCase());
     if (country_id) query = query.eq("country_id", country_id.toUpperCase());
-
     if (min_age) query = query.gte("age", parseInt(min_age));
     if (max_age) query = query.lte("age", parseInt(max_age));
-
-    //Probability Filters
     if (min_gender_probability)
       query = query.gte(
         "gender_probability",
@@ -61,7 +75,14 @@ app.get("/api/profiles", async (req, res) => {
       .order(sort_by, { ascending: order === "asc" })
       .range(from, to);
 
-    if (error) throw error;
+    if (error) {
+      // Handle invalid sort_by columns
+      if (error.code === "PGRST100")
+        return res
+          .status(400)
+          .json({ status: "error", message: "Invalid query parameters" });
+      throw error;
+    }
 
     return res.status(200).json({
       status: "success",
@@ -71,41 +92,6 @@ app.get("/api/profiles", async (req, res) => {
       data: data || [],
     });
   } catch (err) {
-    // If error is a Supabase error
-    if (err.code === "PGRST100") {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Invalid query parameters" });
-    }
-    return res
-      .status(500)
-      .json({ status: "error", message: "Internal server error" });
-  }
-});
-
-app.get("/api/profiles/:id", async (req, res) => {
-  const { id } = req.params;
-  if (!isUuid(id)) {
-    return res.status(400).json({
-      status: "error",
-      message: "Invalid ID format",
-    });
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error || !data) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Profile not found" });
-    }
-    return res.status(200).json({ status: "success", data });
-  } catch (err) {
     return res
       .status(500)
       .json({ status: "error", message: "Internal server error" });
@@ -114,21 +100,40 @@ app.get("/api/profiles/:id", async (req, res) => {
 
 app.get("/api/profiles/search", async (req, res) => {
   const { q } = req.query;
-  if (!q || q.trim() === "") {
+  if (!q || q.trim() === "")
     return res
       .status(400)
       .json({ status: "error", message: "Missing or empty parameter" });
-  }
 
   const extractedFilters = parseQuery(q);
-  if (!extractedFilters) {
+  if (!extractedFilters)
     return res
       .status(400)
       .json({ status: "error", message: "Unable to interpret query" });
-  }
 
   req.query = { ...req.query, ...extractedFilters };
   return app._router.handle(req, res, () => {});
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("🚀 Server running"));
+// Single ID lookup
+app.get("/api/profiles/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!isUuid(id))
+    return res
+      .status(400)
+      .json({ status: "error", message: "Invalid ID format" });
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (error || !data)
+    return res
+      .status(404)
+      .json({ status: "error", message: "Profile not found" });
+
+  return res.status(200).json({ status: "success", data });
+});
+
+app.listen(process.env.PORT || 3000, () => console.log("🚀 Stage 2 Live"));
